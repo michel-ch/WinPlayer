@@ -32,6 +32,20 @@ fn main() -> Result<(), eframe::Error> {
     let initial_volume = settings.read().playback.volume;
     playback.set_volume(initial_volume);
 
+    // Restore last-played song from the previous session (or previous crash).
+    if let Some(record) = winplayer::last_played::load() {
+        if record.path.exists() {
+            if let Some(song) = winplayer::data::tags::read_song(&record.path) {
+                log::info!("restoring last played: {}", record.path.display());
+                playback.load_paused(song);
+            } else {
+                log::warn!("last_played path could not be read: {}", record.path.display());
+            }
+        } else {
+            log::info!("last_played path no longer exists: {}", record.path.display());
+        }
+    }
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])

@@ -121,7 +121,28 @@ impl PlaybackController {
             s.current_position_ms = 0;
             s.duration_ms = song.duration.as_millis() as u64;
         }
+        let _ = crate::last_played::save(&crate::last_played::LastPlayed {
+            path: song.path.clone(),
+            position_ms: 0,
+        });
         self.engine.send(EngineCmd::Load { path: song.path, autoplay: true });
+    }
+
+    /// Restore a song into the queue and load it WITHOUT autoplay. Used at
+    /// startup to surface the last-played track from `last_played.toml`.
+    pub fn load_paused(&self, song: Song) {
+        {
+            let mut q = self.queue.write();
+            q.replace(vec![song.clone()], 0);
+        }
+        {
+            let mut s = self.state.write();
+            s.current_song = Some(song.clone());
+            s.is_playing = false;
+            s.current_position_ms = 0;
+            s.duration_ms = song.duration.as_millis() as u64;
+        }
+        self.engine.send(EngineCmd::Load { path: song.path, autoplay: false });
     }
 
     fn stop_internal(&self) {
