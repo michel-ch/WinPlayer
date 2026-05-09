@@ -2,7 +2,7 @@ pub mod decoder;
 pub mod eq;
 pub mod output;
 
-use crate::engine::decoder::{start_decode, DecodeJob};
+use crate::engine::decoder::{prepare_decode, spawn_decode, DecodeJob};
 use crate::engine::output::AudioOutput;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::path::PathBuf;
@@ -74,10 +74,14 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
                 EngineCmd::Shutdown => break,
                 EngineCmd::Load { path, autoplay } => {
                     let _ = evt_tx.send(EngineEvent::LoadStarted(path.clone()));
-                    if let Some(j) = current_job.take() { j.stop(); }
-                    controls.clear();
-                    match start_decode(path.clone(), controls.clone()) {
-                        Ok(job) => {
+                    // Do all the slow work (open + probe + build decoder + build
+                    // resampler) BEFORE stopping the old track, so the previous
+                    // song stays audible right up to the swap.
+                    match prepare_decode(&path, controls.sample_rate, controls.channels) {
+                        Ok(prepared) => {
+                            if let Some(j) = current_job.take() { j.stop(); }
+                            controls.clear();
+                            let job = spawn_decode(prepared, controls.clone());
                             current_duration_ms = job.duration.as_millis() as u64;
                             current_job = Some(job);
                             paused = !autoplay;

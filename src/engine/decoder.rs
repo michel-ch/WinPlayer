@@ -1,5 +1,4 @@
 use crate::engine::output::OutputControls;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,11 +30,31 @@ impl DecodeJob {
     pub fn is_finished(&self) -> bool { self.finished.load(Ordering::Acquire) }
 }
 
-pub fn start_decode(
-    path: PathBuf,
-    output: OutputControls,
-) -> Result<DecodeJob, String> {
-    let file = std::fs::File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+/// Prepared track state. All slow work (file open, symphonia probe, decoder
+/// construction, FFT-plan-based resampler init) is finished by the time this
+/// returns — so the caller can keep playing the previous track right up
+/// until the moment of swap.
+pub struct PreparedDecode {
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn Decoder>,
+    track_id: u32,
+    src_sr: u32,
+    src_ch: u16,
+    duration: Duration,
+    resampler: Option<rubato::FftFixedInOut<f32>>,
+}
+
+impl PreparedDecode {
+    pub fn duration(&self) -> Duration { self.duration }
+}
+
+pub fn prepare_decode(
+    path: &std::path::Path,
+    dst_sr: u32,
+    dst_ch: u16,
+) -> Result<PreparedDecode, String> {
+    let _ = dst_ch;
+    let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -51,8 +70,8 @@ pub fn start_decode(
     let track = format.default_track().ok_or("no default track")?;
     let track_id = track.id;
     let codec_params = track.codec_params.clone();
-    let source_sample_rate = codec_params.sample_rate.ok_or("missing sample rate")?;
-    let source_channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+    let src_sr = codec_params.sample_rate.ok_or("missing sample rate")?;
+    let src_ch = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
 
     let duration = track.codec_params.n_frames
         .and_then(|frames| {
@@ -64,6 +83,14 @@ pub fn start_decode(
         .make(&codec_params, &DecoderOptions::default())
         .map_err(|e| format!("make decoder: {e}"))?;
 
+    let resampler = if src_sr != dst_sr {
+        rubato::FftFixedInOut::<f32>::new(src_sr as usize, dst_sr as usize, 1024, src_ch as usize).ok()
+    } else { None };
+
+    Ok(PreparedDecode { format, decoder, track_id, src_sr, src_ch, duration, resampler })
+}
+
+pub fn spawn_decode(prepared: PreparedDecode, output: OutputControls) -> DecodeJob {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let seek_request_ms = Arc::new(AtomicU64::new(NO_SEEK));
     let finished = Arc::new(AtomicBool::new(false));
@@ -74,21 +101,27 @@ pub fn start_decode(
 
     let device_sr = output.sample_rate;
     let device_ch = output.channels;
+    let duration = prepared.duration;
+    let src_sr = prepared.src_sr;
+    let src_ch = prepared.src_ch;
 
     std::thread::Builder::new().name("decoder".into()).spawn(move || {
         decoder_loop(
-            format, decoder, track_id,
-            source_sample_rate, source_channels,
+            prepared.format, prepared.decoder, prepared.track_id,
+            prepared.src_sr, prepared.src_ch,
             device_sr, device_ch,
             output,
             stop_clone, seek_clone, finished_clone,
+            prepared.resampler,
         );
-    }).map_err(|e| format!("spawn decoder: {e}"))?;
+    }).expect("spawn decoder");
 
-    Ok(DecodeJob {
+    DecodeJob {
         stop_flag, seek_request_ms, finished,
-        duration, source_sample_rate, source_channels,
-    })
+        duration,
+        source_sample_rate: src_sr,
+        source_channels: src_ch,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -98,18 +131,17 @@ fn decoder_loop(
     track_id: u32,
     src_sr: u32,
     src_ch: u16,
-    dst_sr: u32,
+    _dst_sr: u32,
     dst_ch: u16,
     output: OutputControls,
     stop: Arc<AtomicBool>,
     seek_req: Arc<AtomicU64>,
     finished: Arc<AtomicBool>,
+    pre_built_resampler: Option<rubato::FftFixedInOut<f32>>,
 ) {
     use rubato::{FftFixedInOut, Resampler};
-    let chunk_in: usize = 1024;
-    let mut resampler: Option<FftFixedInOut<f32>> = if src_sr != dst_sr {
-        FftFixedInOut::<f32>::new(src_sr as usize, dst_sr as usize, chunk_in, src_ch as usize).ok()
-    } else { None };
+    let _ = src_sr;
+    let mut resampler: Option<FftFixedInOut<f32>> = pre_built_resampler;
     let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(8192); src_ch as usize];
 
     'outer: loop {

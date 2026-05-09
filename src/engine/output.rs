@@ -164,26 +164,28 @@ fn fill_callback(
         out.fill(0.0);
         return;
     }
-    let vol = *volume.lock();
-    let mut i = 0;
 
+    // Drain ALL skip_samples in this callback so the swap is immediate.
+    // Without this, a 2-second ring buffer takes 2 seconds to drain at the
+    // device's callback rate, producing audible silence between tracks.
     let skip = skip_samples.load(Ordering::Acquire);
     if skip > 0 {
-        let take = (skip as usize).min(out.len());
-        let mut discard = vec![0.0; take];
-        let popped = consumer.pop_slice(&mut discard);
-        skip_samples.fetch_sub(popped as u64, Ordering::AcqRel);
-        for slot in &mut out[..take] { *slot = 0.0; }
-        i = take;
+        let mut tmp = [0.0f32; 1024];
+        let mut total: u64 = 0;
+        while total < skip {
+            let want = ((skip - total) as usize).min(tmp.len());
+            let popped = consumer.pop_slice(&mut tmp[..want]) as u64;
+            if popped == 0 { break; }
+            total += popped;
+        }
+        skip_samples.fetch_sub(total, Ordering::AcqRel);
     }
 
-    if i < out.len() {
-        let popped = consumer.pop_slice(&mut out[i..]);
-        let total_filled = i + popped;
-        for s in &mut out[i..total_filled] { *s *= vol; }
-        if total_filled < out.len() {
-            for s in &mut out[total_filled..] { *s = 0.0; }
-        }
-        samples_played.fetch_add(popped as u64, Ordering::AcqRel);
+    let vol = *volume.lock();
+    let popped = consumer.pop_slice(out);
+    for s in &mut out[..popped] { *s *= vol; }
+    if popped < out.len() {
+        for s in &mut out[popped..] { *s = 0.0; }
     }
+    samples_played.fetch_add(popped as u64, Ordering::AcqRel);
 }
