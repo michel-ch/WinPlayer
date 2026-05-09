@@ -14,7 +14,6 @@ pub struct Settings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanSettings {
     #[serde(default)] pub roots: Vec<PathBuf>,
-    #[serde(default)] pub source_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,10 +57,7 @@ impl Default for Settings {
     fn default() -> Self {
         let scan = if cfg!(debug_assertions) {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            ScanSettings {
-                roots: vec![cwd.join("music")],
-                source_root: Some(cwd.join("music_original")),
-            }
+            ScanSettings { roots: vec![cwd.join("music")] }
         } else {
             ScanSettings::default()
         };

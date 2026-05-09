@@ -31,12 +31,6 @@ pub fn draw(
         }
         if let Some(i) = to_remove { s.scan.roots.remove(i); }
         if ui.button("+ Add path").clicked() { s.scan.roots.push(PathBuf::new()); }
-
-        ui.label("Source library (read-only catalog used by other tools):");
-        let mut src = s.scan.source_root.clone().unwrap_or_default().to_string_lossy().into_owned();
-        if ui.add(egui::TextEdit::singleline(&mut src).desired_width(400.0)).changed() {
-            s.scan.source_root = if src.is_empty() { None } else { Some(PathBuf::from(src)) };
-        }
     });
 
     ui.collapsing("Playback", |ui| {
