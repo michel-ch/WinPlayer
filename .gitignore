@@ -1,8 +1,44 @@
+# Rust build artifacts
 /target
 **/*.rs.bk
 Cargo.lock
+
+# Built binaries
 *.exe
-.idea/
-.vscode/
+*.pdb
+
+# User settings — contains library paths, never commit
+settings.toml
+*.settings.toml
+.winplayer/
+config.toml
+
+# Local audio (debug-mode default scan root)
 music/
 music_original/
+
+# Logs
+*.log
+log/
+logs/
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Environment / secrets (preventive)
+.env
+.env.*
+!.env.example
