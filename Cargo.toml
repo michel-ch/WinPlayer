@@ -2,7 +2,10 @@
 name = "winplayer"
 version = "0.1.0"
 edition = "2021"
+authors = ["michel-ch <yepmtx@gmail.com>"]
 description = "Native Windows music player"
+license-file = "LICENSE"
+publish = false
 
 [dependencies]
 # UI

@@ -1,0 +1,94 @@
+WinPlayer Proprietary License
+=============================
+
+Copyright (C) 2026 michel-ch <yepmtx@gmail.com>
+
+All Rights Reserved.
+
+The source code, binaries, documentation, and all associated assets in this
+repository (collectively, the "Software") are the exclusive property of the
+copyright holder named above (the "Author"). The Software is made available
+for personal, non-commercial viewing and study only.
+
+
+1. PERMITTED USE
+
+   You may:
+
+   a) View and read the source code for personal, non-commercial study.
+   b) Build the Software locally on your own hardware for personal use,
+      provided you do not redistribute the resulting binary.
+
+
+2. RESTRICTIONS
+
+   Without prior, explicit, written permission from the Author, you MAY NOT:
+
+   a) Copy, reproduce, or store the Software in whole or in part in any
+      form intended for distribution.
+   b) Modify, adapt, translate, or create derivative works of the Software.
+   c) Merge the Software into another work.
+   d) Publish, distribute, sublicense, lease, rent, or sell copies of the
+      Software or any derivative work.
+   e) Use the Software, in whole or in part, in any commercial product,
+      service, or context.
+   f) Use the name, likeness, or branding of the Author to endorse or
+      promote products derived from the Software.
+   g) Remove, alter, obscure, or omit any copyright notice, attribution,
+      or this LICENSE file from the Software or any copy thereof.
+   h) Distribute the Software without including this LICENSE file
+      verbatim and without prominently displaying the copyright notice
+      in any user-facing surface (e.g. About screen, splash, README).
+
+
+3. ATTRIBUTION
+
+   Where any use is granted (whether by this LICENSE or by separate
+   written permission from the Author), the following attribution must
+   be preserved:
+
+       "WinPlayer (c) 2026 michel-ch. All Rights Reserved."
+
+   This attribution must appear in the source code header, in any
+   accompanying documentation, and in any user-visible "About" or
+   "Credits" surface.
+
+
+4. THIRD-PARTY COMPONENTS
+
+   The Software depends on third-party Rust crates (eframe, egui, cpal,
+   symphonia, rubato, lofty, biquad, ringbuf, parking_lot,
+   crossbeam-channel, walkdir, directories, toml, serde, rand, image,
+   log, env_logger, and their transitive dependencies). Those components
+   are governed by their own licenses (predominantly MIT and Apache-2.0).
+   Nothing in this LICENSE shall be construed as overriding or
+   superseding the licenses of those third-party components, which
+   continue to govern their respective code.
+
+   This LICENSE applies only to the original code authored by the
+   Author and committed to this repository.
+
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+   NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+   CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+
+
+6. TERMINATION
+
+   Any breach of this LICENSE automatically and immediately terminates
+   the rights granted herein. Upon termination, you must destroy all
+   copies of the Software in your possession or control.
+
+
+7. CONTACT
+
+   To request permission for any use not permitted under section 1,
+   contact the Author at: yepmtx@gmail.com

@@ -59,3 +59,16 @@ queue with shuffle and three repeat modes, per-track delete with folder renumber
 EQ settings UI, all eight screens, keyboard shortcuts. The 10-band biquad EQ
 filter chain is built but not yet inserted into the audio pipeline (the screen
 edits its parameters; runtime patching is future work).
+
+## License
+
+WinPlayer (c) 2026 michel-ch. **All Rights Reserved.**
+
+This software is proprietary. You may view and build it locally for personal,
+non-commercial study. Copying, modifying, redistributing, or commercial use
+requires prior written permission from the author. See [LICENSE](./LICENSE)
+for the full terms.
+
+Third-party Rust crates used at runtime (eframe, egui, cpal, symphonia,
+rubato, lofty, etc.) are governed by their own licenses (predominantly
+MIT / Apache-2.0) and are unaffected by this license.
