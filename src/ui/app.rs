@@ -70,10 +70,17 @@ impl eframe::App for App {
             });
         }
 
-        egui::TopBottomPanel::bottom("mini_player").min_height(60.0).show(ctx, |ui| {
-            let state = self.playback.snapshot();
-            crate::ui::components::mini_player::draw(ui, &state, &self.playback, &mut self.screen);
-        });
+        let visuals = ctx.style().visuals.clone();
+        let mini_frame = egui::Frame::side_top_panel(&ctx.style())
+            .fill(visuals.window_fill)
+            .stroke(egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color));
+        egui::TopBottomPanel::bottom("mini_player")
+            .min_height(60.0)
+            .frame(mini_frame)
+            .show(ctx, |ui| {
+                let state = self.playback.snapshot();
+                crate::ui::components::mini_player::draw(ui, &state, &self.playback, &mut self.screen);
+            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.screen.clone() {
