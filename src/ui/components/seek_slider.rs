@@ -6,12 +6,16 @@ pub fn draw_seek_slider(ui: &mut egui::Ui, state: &PlaybackState) -> Option<f32>
     let id = egui::Id::new(MEM_ID);
 
     let mut frac: f32 = ui.memory(|m| m.data.get_temp::<f32>(id).unwrap_or(state.progress()));
-    let was_dragged_before = ui.memory(|m| m.data.get_temp::<bool>(id.with("was_dragged")).unwrap_or(false));
+    let was_dragged_before = ui.memory(|m| {
+        m.data
+            .get_temp::<bool>(id.with("was_dragged"))
+            .unwrap_or(false)
+    });
 
     let response = ui.add(
         egui::Slider::new(&mut frac, 0.0..=1.0)
             .show_value(false)
-            .clamping(egui::SliderClamping::Always)
+            .clamping(egui::SliderClamping::Always),
     );
 
     if response.dragged() {
@@ -22,7 +26,8 @@ pub fn draw_seek_slider(ui: &mut egui::Ui, state: &PlaybackState) -> Option<f32>
         return None;
     }
 
-    let committed = response.drag_stopped() || response.lost_focus()
+    let committed = response.drag_stopped()
+        || response.lost_focus()
         || (response.changed() && !response.dragged())
         || was_dragged_before;
 

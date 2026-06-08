@@ -1,6 +1,6 @@
 use crate::data::Library;
 use crate::domain::{sort_songs, Screen, Song, SortOption};
-use crate::playback::{delete_song, PlaybackController};
+use crate::playback::{delete_song_with_playback, PlaybackController};
 use crate::ui::components::song_row::{draw_with_options, RowOptions};
 use crate::ui::toasts::Toasts;
 use std::sync::Arc;
@@ -30,20 +30,24 @@ impl Default for AllSongsState {
 impl AllSongsState {
     fn compute_view(&mut self, library: &Arc<Library>) {
         let key = (library.version(), self.sort, self.query.clone());
-        if self.cache_key.as_ref() == Some(&key) { return; }
+        if self.cache_key.as_ref() == Some(&key) {
+            return;
+        }
         let mut songs = library.songs_snapshot();
         let q = self.query.to_lowercase();
         if !q.is_empty() {
-            songs.retain(|s|
-                s.title.to_lowercase().contains(&q) ||
-                s.artist.to_lowercase().contains(&q) ||
-                s.album.to_lowercase().contains(&q)
-            );
+            songs.retain(|s| {
+                s.title.to_lowercase().contains(&q)
+                    || s.artist.to_lowercase().contains(&q)
+                    || s.album.to_lowercase().contains(&q)
+            });
         }
         sort_songs(&mut songs, self.sort);
         self.cached = songs;
         self.cache_key = Some(key);
-        if self.page * PAGE_SIZE >= self.cached.len() && self.page > 0 { self.page = 0; }
+        if self.page * PAGE_SIZE >= self.cached.len() && self.page > 0 {
+            self.page = 0;
+        }
     }
 }
 
@@ -56,6 +60,7 @@ pub fn draw(
     renumber_threshold: f32,
     _screen: &mut Screen,
 ) {
+    crate::ui::components::page_header::page_header(ui, "Library", "All Songs");
     ui.horizontal(|ui| {
         let mut new_sort = state.sort;
         egui::ComboBox::from_label("Sort")
@@ -69,7 +74,10 @@ pub fn draw(
             state.sort = new_sort;
             state.cache_key = None;
         }
-        if ui.add(egui::TextEdit::singleline(&mut state.query).hint_text("Search\u{2026}")).changed() {
+        if ui
+            .add(egui::TextEdit::singleline(&mut state.query).hint_text("Search\u{2026}"))
+            .changed()
+        {
             state.cache_key = None;
         }
     });
@@ -80,10 +88,19 @@ pub fn draw(
     let start = state.page * PAGE_SIZE;
     let end = (start + PAGE_SIZE).min(total);
 
-    ui.label(format!("{} songs   page {}/{}", total, state.page + 1, pages.max(1)));
+    ui.label(format!(
+        "{} songs   page {}/{}",
+        total,
+        state.page + 1,
+        pages.max(1)
+    ));
     ui.horizontal(|ui| {
-        if ui.button("\u{25C0} Prev").clicked() && state.page > 0 { state.page -= 1; }
-        if ui.button("Next \u{25B6}").clicked() && state.page + 1 < pages { state.page += 1; }
+        if ui.button("\u{25C0} Prev").clicked() && state.page > 0 {
+            state.page -= 1;
+        }
+        if ui.button("Next \u{25B6}").clicked() && state.page + 1 < pages {
+            state.page += 1;
+        }
     });
     ui.separator();
 
@@ -105,16 +122,26 @@ pub fn draw(
             if action.remove_clicked {
                 let id = song.id;
                 let lib = library.clone();
-                match delete_song(&lib, id, true, renumber_threshold) {
-                    Ok(res) => toasts.info(format!(
-                        "Deleted {} ({} renumbered)",
-                        res.deleted_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                        res.renumbered,
-                    )),
+                match delete_song_with_playback(
+                    &lib,
+                    playback.as_ref(),
+                    id,
+                    true,
+                    renumber_threshold,
+                ) {
+                    Ok(res) => {
+                        toasts.info(format!(
+                            "Deleted {} ({} renumbered)",
+                            res.deleted_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            res.renumbered,
+                        ));
+                    }
                     Err(e) => toasts.error(format!("Delete failed: {e}")),
                 }
                 state.cache_key = None;
-                playback.remove_from_queue(id);
             }
         }
     });

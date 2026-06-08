@@ -3,7 +3,7 @@ use crate::domain::Song;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EXTS: &[&str] = &["mp3", "flac", "m4a", "ogg", "wav", "aac", "opus"];
+const EXTS: &[&str] = &["mp3", "flac", "m4a", "ogg", "wav", "aac"];
 
 pub fn is_audio_path(path: &Path) -> bool {
     path.extension()
@@ -19,9 +19,13 @@ pub fn scan_root(root: &Path) -> Vec<Song> {
         return out;
     }
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
-        if !is_audio_path(path) { continue; }
+        if !is_audio_path(path) {
+            continue;
+        }
         if let Some(song) = read_song(path) {
             out.push(song);
         }
@@ -38,7 +42,7 @@ mod tests {
     fn extension_check_is_case_insensitive() {
         assert!(is_audio_path(&PathBuf::from("a.MP3")));
         assert!(is_audio_path(&PathBuf::from("a.flac")));
-        assert!(is_audio_path(&PathBuf::from("a.OPUS")));
+        assert!(!is_audio_path(&PathBuf::from("a.OPUS")));
         assert!(!is_audio_path(&PathBuf::from("a.txt")));
         assert!(!is_audio_path(&PathBuf::from("a")));
     }

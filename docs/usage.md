@@ -13,6 +13,15 @@ The library scans in the background. You'll see a "Scanning library… (N songs
 so far)" status bar at the top while it runs. Once scanning completes the
 status bar disappears and the song count is shown in the top bar.
 
+## Resume on startup
+
+WinPlayer remembers the last track you were playing. On the next launch it
+reopens that track **paused**, positioned at the point you left off — so you
+can pick up where you stopped without re-finding the song. Your saved volume is
+applied on startup. Shuffle state and repeat mode are saved in settings, but are
+not currently reapplied during startup. If the file has since been moved or
+deleted, the app just starts with nothing loaded.
+
 ## Screens
 
 The top bar provides navigation between the seven main screens. Some screens
@@ -65,19 +74,24 @@ Ten band sliders at 31 / 62 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz.
 Each band has a range of ±12 dB. Toggle **Enabled** to switch the EQ on/off.
 **Reset to flat** zeros all bands. **Save** writes to `settings.toml`.
 
-Note: at the time of writing the EQ chain is built but not yet inserted into
-the audio pipeline — the screen edits parameters and persists them, but the
-filters do not yet affect playback.
+Note: the audio engine has an EQ command path, but the Equalizer screen does
+not yet send live changes to the playback controller. The screen edits and
+persists settings; those controls should not be treated as live audio controls
+until the UI-to-playback binding is added.
 
 ### Settings
 
 - **Library paths** — list of folders the scanner walks. `+ Add path` adds an
   empty row; type a path; ✕ removes a row.
-- **Playback** — master volume slider.
+- **Playback** — saved startup volume. Use the mini-player volume slider for
+  live playback changes; on exit, the live playback volume is written back to
+  settings and can overwrite a settings-only volume edit.
 - **Renumber** — toggle and threshold for the auto-renumber-on-delete feature.
 
 **Save** persists to `%APPDATA%\Recurate\Recurate\settings.toml` and triggers
-a re-scan in the background.
+a re-scan in the background unless a scan is already running. If one is running,
+the save still succeeds and the app warns that the new paths will be picked up
+after the current scan finishes.
 
 ## Mini-player (always visible)
 
@@ -120,10 +134,10 @@ Bare arrow keys are intentionally not bound — egui ScrollAreas use them.
 
 ## Shuffle
 
-Toggling shuffle ON sets a flag on the queue. Note: the **shuffle order** for
-a freshly-built queue is produced upstream by `SortOption::Shuffle` when you
-select "Shuffle" from the Sort dropdown in AllSongs. The queue's shuffle flag
-exists for future per-queue reshuffling.
+Toggling shuffle ON changes queue navigation: next/previous step through the
+current queue with a deterministic non-sequential stride. For a freshly-built
+queue, selecting "Shuffle" from the Sort dropdown in AllSongs still randomizes
+the initial queue order before playback starts.
 
 ## Renumber on delete
 
@@ -167,8 +181,12 @@ enabled = true
 threshold = 0.5
 ```
 
-A corrupt file is replaced with defaults at startup with a warning logged —
-the app does not crash.
+A corrupt file is renamed to `settings.toml.bak` at startup and replaced with
+defaults (a warning is logged) — the app does not crash, and your old file is
+preserved for inspection. Out-of-range or non-finite values (e.g. a hand-edited
+`volume = nan` or `volume = 5.0`) are clamped to sane bounds on load. Saves are
+atomic: the file is written to a unique temp name and renamed into place, so a
+crash mid-write can never truncate your settings.
 
 ## Library paths
 
@@ -176,5 +194,6 @@ A path can point to any folder; the scanner walks recursively through every
 subfolder. Multiple paths are supported (each gets its own scan thread).
 Missing paths are logged and skipped — they do not abort the scan.
 
-Supported extensions: `mp3`, `flac`, `m4a`, `ogg`, `wav`, `aac`, `opus`.
-Other files are silently skipped.
+Supported extensions: `mp3`, `flac`, `m4a`, `ogg`, `wav`, `aac`.
+Other files, including `.opus`, are silently skipped because the enabled
+Symphonia decoder features do not include native Opus support.

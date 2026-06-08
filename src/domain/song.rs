@@ -40,7 +40,9 @@ mod tests {
 
     #[test]
     fn windows_paths_normalize_to_same_key() {
-        if !cfg!(windows) { return; }
+        if !cfg!(windows) {
+            return;
+        }
         let a = PathBuf::from(r"C:\Music\foo.mp3");
         let b = PathBuf::from(r"c:\music\foo.mp3");
         let c = PathBuf::from("C:/Music/foo.mp3");

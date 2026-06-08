@@ -7,31 +7,34 @@ first for the threading model and layer dependencies.
 
 | File | Responsibility |
 |---|---|
-| `src/main.rs` | eframe entry. Loads settings, spawns scan thread, starts engine, builds controller, runs UI. |
-| `src/lib.rs` | Re-exports the seven top-level modules. |
-| `src/settings.rs` | TOML persistence at `%APPDATA%\Recurate\Recurate\settings.toml`. |
-| `src/renumberer.rs` | Two-pass folder rename. |
+| `src/main.rs` | eframe entry. Loads settings, spawns scan thread, starts engine, builds controller, restores last-played, runs UI. |
+| `src/lib.rs` | Re-exports the top-level modules. |
+| `src/settings.rs` | TOML persistence at `%APPDATA%\Recurate\Recurate\settings.toml` (atomic write, clamp-on-load, corrupt-file backup). |
+| `src/last_played.rs` | Crash-safe last-played record (atomic write) read at startup for session resume. |
+| `src/renumberer.rs` | Two-pass folder rename with rollback on failure. |
 | `src/domain/song.rs` | `Song` struct + path-id hashing (case-folded on Windows). |
 | `src/domain/playback_state.rs` | `PlaybackState` + `RepeatMode`. |
 | `src/domain/sort.rs` | `SortOption` (13 variants) + `sort_songs`. |
 | `src/domain/screen.rs` | `Screen` enum. |
 | `src/data/library.rs` | `Library` (RwLock-protected `Vec<Song>` + version counter). |
 | `src/data/scanner.rs` | `WalkDir` scan + extension allowlist. |
-| `src/data/tags.rs` | Lofty wrapper with `catch_unwind` and tag fallbacks. |
+| `src/data/tags.rs` | Lofty wrapper with tag fallbacks; `catch_unwind` only catches panics in unwind builds. |
 | `src/engine/output.rs` | `AudioOutput` + `OutputControls` (cpal stream + ring buffer). |
 | `src/engine/decoder.rs` | `prepare_decode` + `spawn_decode` (symphonia + rubato). |
 | `src/engine/eq.rs` | 10-band biquad equalizer. |
 | `src/engine/mod.rs` | `Engine` facade with command/event channels and engine thread. |
 | `src/playback/queue.rs` | `Queue` with repeat-aware indexing. |
 | `src/playback/deletion.rs` | `delete_song` pipeline. |
-| `src/playback/controller.rs` | `PlaybackController` bridge with playback-events thread. |
-| `src/ui/app.rs` | `eframe::App` impl + screen routing + keyboard shortcuts. |
-| `src/ui/fonts.rs` | Unicode font fallback chain. |
-| `src/ui/toasts.rs` | Top-right notifications. |
+| `src/playback/controller.rs` | `PlaybackController` bridge with playback-events thread; `pending_seek_ms` for resume; `shutdown()`. |
+| `src/ui/app.rs` | `eframe::App` impl + screen routing + keyboard shortcuts; `Drop` persists state + shuts the engine down. |
+| `src/ui/theme.rs` | Editorial light theme — egui `Visuals`, color tokens (cream / sepia / terracotta), serif/sans/mono text styles. |
+| `src/ui/fonts.rs` | Font loading: Segoe UI (sans/mono) + Georgia/Times (serif family) from `C:\Windows\Fonts`. |
+| `src/ui/toasts.rs` | Top-right notifications (theme-colored). |
+| `src/ui/components/page_header.rs` | Shared `page_header(crumb, title)` + `back_link(label)` (serif heading + hairline rule). |
 | `src/ui/components/seek_slider.rs` | Shared scrubber widget with memory-stash trick. |
-| `src/ui/components/song_row.rs` | Reusable interactive row with rect-allocate-first. |
-| `src/ui/components/top_bar.rs` | Top navigation. |
-| `src/ui/components/mini_player.rs` | Bottom mini-player. |
+| `src/ui/components/song_row.rs` | Reusable interactive row; row-scoped clipped painter. |
+| `src/ui/components/top_bar.rs` | Top navigation (serif wordmark + accent dot). |
+| `src/ui/components/mini_player.rs` | Bottom mini-player (custom circular transport, terracotta play). |
 | `src/ui/screens/all_songs.rs` | Paginated, sortable, searchable AllSongs. |
 | `src/ui/screens/albums.rs` | AlbumsList + AlbumDetail. |
 | `src/ui/screens/artists.rs` | ArtistsList + ArtistDetail. |
@@ -119,7 +122,8 @@ The scope tells reviewers where to look; keep the summary under 70 chars.
 
 - **Never call into the engine from the audio callback.** The callback is
   bound by cpal's real-time guarantees; allocation, locking, or channel sends
-  can cause buffer underruns.
+  can cause buffer underruns. The current I16/U16 callback paths reuse a scratch
+  buffer, but can still resize it if the callback length changes.
 - **Never block in the UI thread for more than a frame budget (~16 ms).** Long
   work goes on a background thread. Use `Arc<RwLock<T>>` snapshots for the UI
   to read.
@@ -143,13 +147,19 @@ For multi-threaded modules:
 ## Performance notes
 
 - **Library snapshot** (`Library::songs_snapshot`) is `clone()` of `Vec<Song>`.
-  For a 2,500-track library this is ~1 ms. UI screens cache the result keyed
-  on `library.version()` to avoid cloning every frame.
+  For a 2,500-track library this is ~1 ms. UI screens cache derived views keyed
+  on `library.version()` so they don't clone or recompute every frame: AllSongs
+  caches the sorted+filtered list on `(version, sort, query)`; Albums, Artists,
+  and Folders cache their facet maps on `version` (`AlbumsCache`, `ArtistsCache`,
+  `FoldersState`). When you add a list screen, follow the same pattern — don't
+  rebuild a `BTreeMap` from a fresh snapshot every frame.
 - **AllSongs pagination + virtualization** keeps per-frame render under 1 ms
   even for tens of thousands of tracks. Don't lift it — it's load-bearing.
-- **Engine recv_timeout** is 20 ms. Position events fire ~50× per second.
-  This is enough resolution for the scrubber and time label without
-  burning channel-write cycles.
+- **Idle repaint gating.** `App::update` only calls `request_repaint_after`
+  when something is actually changing (playing, scanning, or a toast is up);
+  an idle UI is fully event-driven. Don't add an unconditional repaint tick.
+- **Engine recv_timeout** is 20 ms. Position events fire ~50× per second via
+  `try_send`. Enough resolution for the scrubber without burning the channel.
 
 ## When in doubt
 

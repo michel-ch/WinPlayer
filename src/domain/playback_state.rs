@@ -1,9 +1,10 @@
 use crate::domain::Song;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RepeatMode {
+    #[default]
     Off,
     All,
     One,
@@ -17,10 +18,6 @@ impl RepeatMode {
             RepeatMode::One => RepeatMode::Off,
         }
     }
-}
-
-impl Default for RepeatMode {
-    fn default() -> Self { RepeatMode::Off }
 }
 
 #[derive(Debug, Clone, Default)]

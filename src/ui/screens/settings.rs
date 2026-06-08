@@ -1,4 +1,4 @@
-use crate::data::Library;
+use crate::data::{Library, LibraryStatus};
 use crate::domain::Screen;
 use crate::settings::Settings;
 use crate::ui::toasts::Toasts;
@@ -13,45 +13,99 @@ pub fn draw(
     toasts: &mut Toasts,
     screen: &mut Screen,
 ) {
-    if ui.button("\u{25C0} Back").clicked() { *screen = Screen::AllSongs; }
-    ui.heading("Settings");
+    if crate::ui::components::page_header::back_link(ui, "Library") {
+        *screen = Screen::AllSongs;
+    }
+    crate::ui::components::page_header::page_header(ui, "Preferences", "Settings");
 
-    let mut s = settings.write();
+    let snapshot = settings.read().clone();
+    let mut edited = snapshot.clone();
+    let mut dirty = false;
+    let mut save_clicked = false;
 
     ui.collapsing("Library paths", |ui| {
         let mut to_remove: Option<usize> = None;
-        for (i, root) in s.scan.roots.iter_mut().enumerate() {
+        for (i, root) in edited.scan.roots.iter_mut().enumerate() {
             ui.horizontal(|ui| {
                 let mut buf = root.to_string_lossy().into_owned();
-                if ui.add(egui::TextEdit::singleline(&mut buf).desired_width(400.0)).changed() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut buf).desired_width(400.0))
+                    .changed()
+                {
                     *root = PathBuf::from(buf);
+                    dirty = true;
                 }
-                if ui.small_button("\u{2715}").clicked() { to_remove = Some(i); }
+                if ui.small_button("\u{2715}").clicked() {
+                    to_remove = Some(i);
+                }
             });
         }
-        if let Some(i) = to_remove { s.scan.roots.remove(i); }
-        if ui.button("+ Add path").clicked() { s.scan.roots.push(PathBuf::new()); }
+        if let Some(i) = to_remove {
+            edited.scan.roots.remove(i);
+            dirty = true;
+        }
+        if ui.button("+ Add path").clicked() {
+            edited.scan.roots.push(PathBuf::new());
+            dirty = true;
+        }
     });
 
     ui.collapsing("Playback", |ui| {
-        ui.add(egui::Slider::new(&mut s.playback.volume, 0.0..=1.0).text("Volume"));
+        if ui
+            .add(egui::Slider::new(&mut edited.playback.volume, 0.0..=1.0).text("Volume"))
+            .changed()
+        {
+            dirty = true;
+        }
     });
 
     ui.collapsing("Renumber", |ui| {
-        ui.checkbox(&mut s.renumber.enabled, "Renumber on delete");
-        ui.add(egui::Slider::new(&mut s.renumber.threshold, 0.0..=1.0).text("Threshold"));
+        if ui
+            .checkbox(&mut edited.renumber.enabled, "Renumber on delete")
+            .changed()
+        {
+            dirty = true;
+        }
+        if ui
+            .add(egui::Slider::new(&mut edited.renumber.threshold, 0.0..=1.0).text("Threshold"))
+            .changed()
+        {
+            dirty = true;
+        }
     });
 
     ui.add_space(12.0);
     if ui.button("Save").clicked() {
-        let snap = s.clone();
-        drop(s);
+        save_clicked = true;
+    }
+
+    if dirty {
+        *settings.write() = edited.clone();
+    }
+
+    if save_clicked {
+        let snap = if dirty {
+            edited
+        } else {
+            settings.read().clone()
+        };
         match snap.save() {
             Ok(_) => toasts.info("Settings saved"),
             Err(e) => toasts.error(format!("Save failed: {e}")),
         }
-        let lib = library.clone();
-        let roots = settings.read().scan.roots.clone();
-        std::thread::spawn(move || lib.scan(&roots));
+        // Skip rescan if one is already running — otherwise a double-click
+        // launches two parallel scans on the same library.
+        if library.status() != LibraryStatus::Scanning {
+            let lib = library.clone();
+            let roots = snap.scan.roots.clone();
+            std::thread::Builder::new()
+                .name("library-rescan".into())
+                .spawn(move || {
+                    lib.scan(&roots);
+                })
+                .ok();
+        } else {
+            toasts.warn("Scan already in progress; new paths will be picked up after it finishes");
+        }
     }
 }

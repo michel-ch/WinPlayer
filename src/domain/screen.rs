@@ -14,6 +14,9 @@ pub enum Screen {
 
 impl Screen {
     pub fn shows_chrome(&self) -> bool {
-        !matches!(self, Screen::NowPlaying | Screen::Settings | Screen::Equalizer)
+        !matches!(
+            self,
+            Screen::NowPlaying | Screen::Settings | Screen::Equalizer
+        )
     }
 }

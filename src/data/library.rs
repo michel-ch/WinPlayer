@@ -27,15 +27,29 @@ impl Library {
         }
     }
 
-    pub fn version(&self) -> u64 { self.version.load(Ordering::Acquire) }
-    fn bump(&self) { self.version.fetch_add(1, Ordering::AcqRel); }
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+    fn bump(&self) {
+        self.version.fetch_add(1, Ordering::AcqRel);
+    }
 
-    pub fn status(&self) -> LibraryStatus { *self.status.read() }
-    pub fn set_status(&self, s: LibraryStatus) { *self.status.write() = s; }
+    pub fn status(&self) -> LibraryStatus {
+        *self.status.read()
+    }
+    pub fn set_status(&self, s: LibraryStatus) {
+        *self.status.write() = s;
+    }
 
-    pub fn songs_snapshot(&self) -> Vec<Song> { self.songs.read().clone() }
-    pub fn len(&self) -> usize { self.songs.read().len() }
-    pub fn is_empty(&self) -> bool { self.songs.read().is_empty() }
+    pub fn songs_snapshot(&self) -> Vec<Song> {
+        self.songs.read().clone()
+    }
+    pub fn len(&self) -> usize {
+        self.songs.read().len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.songs.read().is_empty()
+    }
 
     pub fn find_by_id(&self, id: i64) -> Option<Song> {
         self.songs.read().iter().find(|s| s.id == id).cloned()
@@ -52,44 +66,25 @@ impl Library {
                     all.push(song);
                 }
             }
-            *self.songs.write() = all.clone();
+        }
+        {
+            let mut songs = self.songs.write();
+            *songs = all;
             self.bump();
         }
-        *self.songs.write() = all;
-        self.bump();
         self.set_status(LibraryStatus::Ready);
     }
 
     pub fn refresh_folder(&self, folder: &Path) {
-        let key = if cfg!(windows) {
-            folder.to_string_lossy().replace('\\', "/").to_lowercase()
-        } else {
-            folder.to_string_lossy().into_owned()
-        };
-        {
-            let mut songs = self.songs.write();
-            songs.retain(|s| {
-                let parent = s.path.parent().map(|p| {
-                    if cfg!(windows) {
-                        p.to_string_lossy().replace('\\', "/").to_lowercase()
-                    } else {
-                        p.to_string_lossy().into_owned()
-                    }
-                });
-                parent.as_deref() != Some(key.as_str())
-            });
-        }
         let new = scan_root(folder);
-        {
-            let mut songs = self.songs.write();
-            let existing_keys: HashSet<String> = songs.iter()
-                .map(|s| normalize_path_key(&s.path))
-                .collect();
-            for song in new {
-                let k = normalize_path_key(&song.path);
-                if !existing_keys.contains(&k) {
-                    songs.push(song);
-                }
+        let mut songs = self.songs.write();
+        songs.retain(|s| !path_is_under_folder(&s.path, folder));
+        let mut existing_keys: HashSet<String> =
+            songs.iter().map(|s| normalize_path_key(&s.path)).collect();
+        for song in new {
+            let k = normalize_path_key(&song.path);
+            if existing_keys.insert(k) {
+                songs.push(song);
             }
         }
         self.bump();
@@ -100,18 +95,32 @@ impl Library {
         let before = songs.len();
         songs.retain(|s| s.id != id);
         let removed = songs.len() < before;
-        if removed { drop(songs); self.bump(); }
+        if removed {
+            self.bump();
+        }
         removed
     }
 
     pub fn replace_all(&self, new_songs: Vec<Song>) {
-        *self.songs.write() = new_songs;
+        let mut songs = self.songs.write();
+        *songs = new_songs;
         self.bump();
     }
 }
 
+fn path_is_under_folder(path: &Path, folder: &Path) -> bool {
+    let path_key = normalize_path_key(path);
+    let mut folder_key = normalize_path_key(folder);
+    if !folder_key.ends_with('/') {
+        folder_key.push('/');
+    }
+    path_key.starts_with(&folder_key)
+}
+
 impl Default for Library {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -123,10 +132,15 @@ mod tests {
     fn fake(path: &str) -> Song {
         Song {
             id: song_id_from_path(Path::new(path)),
-            title: "t".into(), artist: "a".into(), album: "al".into(),
+            title: "t".into(),
+            artist: "a".into(),
+            album: "al".into(),
             album_artist: "a".into(),
             duration: Duration::from_secs(1),
-            year: None, genre: None, composer: None, track_no: None,
+            year: None,
+            genre: None,
+            composer: None,
+            track_no: None,
             path: PathBuf::from(path),
             has_embedded_art: false,
         }
@@ -154,5 +168,23 @@ mod tests {
         let s = fake("/a.mp3");
         lib.replace_all(vec![s.clone()]);
         assert_eq!(lib.find_by_id(s.id).unwrap().path, s.path);
+    }
+
+    #[test]
+    fn refresh_folder_removes_stale_tracks_under_nested_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("music");
+        let nested = root.join("disc1");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let stale_nested = fake(&nested.join("old.mp3").to_string_lossy());
+        let outside = fake(&dir.path().join("outside.mp3").to_string_lossy());
+
+        let lib = Library::new();
+        lib.replace_all(vec![stale_nested, outside.clone()]);
+        lib.refresh_folder(&root);
+
+        let songs = lib.songs_snapshot();
+        assert_eq!(songs, vec![outside]);
     }
 }

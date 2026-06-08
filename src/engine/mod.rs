@@ -16,6 +16,7 @@ pub enum EngineCmd {
     Stop,
     SeekFraction(f32),
     SetVolume(f32),
+    SetEqualizer { enabled: bool, bands_db: [f32; 10] },
     Shutdown,
 }
 
@@ -40,9 +41,12 @@ impl Engine {
         let (cmd_tx, cmd_rx) = bounded::<EngineCmd>(64);
         let (evt_tx, evt_rx) = bounded::<EngineEvent>(256);
 
-        std::thread::Builder::new().name("engine".into()).spawn(move || {
-            engine_thread(cmd_rx, evt_tx);
-        }).map_err(|e| format!("spawn engine: {e}"))?;
+        std::thread::Builder::new()
+            .name("engine".into())
+            .spawn(move || {
+                engine_thread(cmd_rx, evt_tx);
+            })
+            .map_err(|e| format!("spawn engine: {e}"))?;
 
         Ok(Self { cmd_tx, evt_rx })
     }
@@ -51,7 +55,9 @@ impl Engine {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    pub fn events(&self) -> Receiver<EngineEvent> { self.evt_rx.clone() }
+    pub fn events(&self) -> Receiver<EngineEvent> {
+        self.evt_rx.clone()
+    }
 }
 
 fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
@@ -73,20 +79,37 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
             Ok(cmd) => match cmd {
                 EngineCmd::Shutdown => break,
                 EngineCmd::Load { path, autoplay } => {
-                    let _ = evt_tx.send(EngineEvent::LoadStarted(path.clone()));
+                    let _ = evt_tx.try_send(EngineEvent::LoadStarted(path.clone()));
                     // Do all the slow work (open + probe + build decoder + build
                     // resampler) BEFORE stopping the old track, so the previous
                     // song stays audible right up to the swap.
                     match prepare_decode(&path, controls.sample_rate, controls.channels) {
                         Ok(prepared) => {
-                            if let Some(j) = current_job.take() { j.stop(); }
+                            // Stop AND join the old decoder so no stale pushes can race
+                            // with the upcoming clear() — this is what makes the
+                            // skip_samples drain count accurate.
+                            if let Some(j) = current_job.take() {
+                                j.stop();
+                            }
                             controls.clear();
-                            let job = spawn_decode(prepared, controls.clone());
-                            current_duration_ms = job.duration.as_millis() as u64;
-                            current_job = Some(job);
-                            paused = !autoplay;
-                            if autoplay { controls.play(); } else { controls.pause(); }
-                            let _ = evt_tx.send(EngineEvent::Started { duration_ms: current_duration_ms });
+                            match spawn_decode(prepared, controls.clone()) {
+                                Ok(job) => {
+                                    current_duration_ms = job.duration.as_millis() as u64;
+                                    current_job = Some(job);
+                                    paused = !autoplay;
+                                    if autoplay {
+                                        controls.play();
+                                    } else {
+                                        controls.pause();
+                                    }
+                                    let _ = evt_tx.send(EngineEvent::Started {
+                                        duration_ms: current_duration_ms,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = evt_tx.send(EngineEvent::LoadFailed { path, error: e });
+                                }
+                            }
                         }
                         Err(e) => {
                             let _ = evt_tx.send(EngineEvent::LoadFailed { path, error: e });
@@ -96,15 +119,17 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
                 EngineCmd::Play => {
                     controls.play();
                     paused = false;
-                    let _ = evt_tx.send(EngineEvent::Resumed);
+                    let _ = evt_tx.try_send(EngineEvent::Resumed);
                 }
                 EngineCmd::Pause => {
                     controls.pause();
                     paused = true;
-                    let _ = evt_tx.send(EngineEvent::Paused);
+                    let _ = evt_tx.try_send(EngineEvent::Paused);
                 }
                 EngineCmd::Stop => {
-                    if let Some(j) = current_job.take() { j.stop(); }
+                    if let Some(j) = current_job.take() {
+                        j.stop();
+                    }
                     controls.clear();
                     current_duration_ms = 0;
                 }
@@ -114,11 +139,16 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
                         job.seek(target_ms);
                         controls.drain_buffer();
                         controls.set_position_anchor_ms(target_ms);
-                        if !paused { controls.play(); }
+                        if !paused {
+                            controls.play();
+                        }
                     }
                 }
                 EngineCmd::SetVolume(v) => {
                     controls.set_volume(v);
+                }
+                EngineCmd::SetEqualizer { enabled, bands_db } => {
+                    controls.set_equalizer(enabled, bands_db);
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -127,7 +157,10 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
 
         if let Some(job) = &current_job {
             let current_ms = controls.played_duration_ms();
-            let _ = evt_tx.send(EngineEvent::Position {
+            // Position events are disposable — never block the engine on a
+            // backed-up event queue. End-of-track signals are critical and
+            // still use blocking send below.
+            let _ = evt_tx.try_send(EngineEvent::Position {
                 current_ms,
                 duration_ms: current_duration_ms,
             });
@@ -139,4 +172,26 @@ fn engine_thread(cmd_rx: Receiver<EngineCmd>, evt_tx: Sender<EngineEvent>) {
         }
     }
     drop(output);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_command_can_carry_equalizer_settings() {
+        let cmd = EngineCmd::SetEqualizer {
+            enabled: true,
+            bands_db: [1.0, 0.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 5.0],
+        };
+
+        match cmd {
+            EngineCmd::SetEqualizer { enabled, bands_db } => {
+                assert!(enabled);
+                assert_eq!(bands_db[0], 1.0);
+                assert_eq!(bands_db[9], 5.0);
+            }
+            _ => panic!("expected equalizer command"),
+        }
+    }
 }

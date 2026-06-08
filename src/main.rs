@@ -16,12 +16,15 @@ fn main() -> Result<(), eframe::Error> {
     {
         let lib = library.clone();
         let roots = settings.read().scan.roots.clone();
-        std::thread::Builder::new().name("library-scan".into()).spawn(move || {
-            lib.scan(&roots);
-        }).expect("spawn library-scan");
+        std::thread::Builder::new()
+            .name("library-scan".into())
+            .spawn(move || {
+                lib.scan(&roots);
+            })
+            .expect("spawn library-scan");
     }
 
-    let playback = match PlaybackController::new(library.clone()) {
+    let playback = match PlaybackController::new() {
         Ok(p) => p,
         Err(e) => {
             log::error!("playback init failed: {e}");
@@ -36,13 +39,23 @@ fn main() -> Result<(), eframe::Error> {
     if let Some(record) = winplayer::last_played::load() {
         if record.path.exists() {
             if let Some(song) = winplayer::data::tags::read_song(&record.path) {
-                log::info!("restoring last played: {}", record.path.display());
-                playback.load_paused(song);
+                log::info!(
+                    "restoring last played: {} @ {}ms",
+                    record.path.display(),
+                    record.position_ms,
+                );
+                playback.load_paused(song, record.position_ms);
             } else {
-                log::warn!("last_played path could not be read: {}", record.path.display());
+                log::warn!(
+                    "last_played path could not be read: {}",
+                    record.path.display()
+                );
             }
         } else {
-            log::info!("last_played path no longer exists: {}", record.path.display());
+            log::info!(
+                "last_played path no longer exists: {}",
+                record.path.display()
+            );
         }
     }
 

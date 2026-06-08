@@ -23,8 +23,11 @@ and not muted. cpal binds to whatever the OS reports as the default.
 
 **2. Check the volume slider isn't at 0.**
 
-The mini-player has a small "vol" slider. The Settings → Playback section
-also has a master volume.
+The mini-player has the live volume slider on the right. The Settings →
+Playback volume is a persisted preference; changing it there does not update
+the currently-running audio engine, and the live playback volume is written
+back on exit. (A `nan`/`inf` volume hand-edited into `settings.toml` is
+scrubbed to a safe value on load, so that can't be the cause.)
 
 **3. Check the engine started.**
 
@@ -75,8 +78,8 @@ folder that exists on disk. Typos are silent — the scanner just reports
 
 **3. Check the file format.**
 
-Only `mp3`, `flac`, `m4a`, `ogg`, `wav`, `aac`, `opus` are scanned. Other
-formats are silently skipped.
+Only `mp3`, `flac`, `m4a`, `ogg`, `wav`, and `aac` are scanned. Other formats,
+including `.opus`, are silently skipped.
 
 **4. Check file readability.**
 
@@ -91,18 +94,19 @@ or a read-protected network share) are skipped. The scanner uses
 A scan over a 50,000-track library on a slow disk can take 5–10 minutes.
 Watch the song count tick up — if it's still climbing, scanning is working.
 
-**2. A pathological file panicked the tag reader.**
+**2. A pathological file failed tag parsing.**
 
-The scanner wraps `lofty::Probe::open` in `catch_unwind` to survive
-malformed ID3 tags. If a panic does slip through (e.g. an unrelated codec
-panic), the offending file logs:
+Normal tag read errors cause that file to be skipped. The scanner also wraps
+tag reads in `catch_unwind`, but that only catches panics in unwind builds.
+Release builds use `panic = "abort"`, so a true parser panic is process-fatal
+before fallback metadata can be built. In an unwind build, a caught panic logs:
 
 ```
 [WARN  winplayer::data::tags] lofty panicked on <path>
 ```
 
-A synthetic Song is built from filename and parent folder name, so the
-file still appears in the library — it just has minimal metadata.
+A synthetic Song is built from filename and parent folder name in that unwind
+build path, so the file still appears in the library with minimal metadata.
 
 **3. The scan thread crashed.**
 
@@ -112,12 +116,14 @@ file path that triggered it.
 ## "Crash on a track with foreign characters in the title"
 
 This was the motivation for the `catch_unwind` in `data/tags.rs`. lofty's
-ID3v1 parser slices the fixed 30-byte title field as UTF-8 *without* checking
-codepoint boundaries. Truncated CJK / Cyrillic titles can panic the decoder.
-We catch this and fall back to filename + parent folder name.
+ID3v1 parser has historically hit UTF-8 boundary panics on malformed fixed-size
+fields. In unwind builds the wrapper can catch that and fall back to filename +
+parent folder name; in release builds with `panic = "abort"`, such a panic
+terminates the process.
 
-If you see a crash log without the `catch_unwind` warning, the panic came
-from somewhere else. File a bug with the log and the file path.
+If you see a crash log without the `catch_unwind` warning, the panic either
+came from somewhere else or occurred in an aborting build before unwind
+recovery was possible. File a bug with the log and the file path.
 
 ## "Track switching is slow / has audible silence"
 
@@ -153,14 +159,18 @@ directory is read-only or the disk is full, save will fail and toast an error.
 
 **2. Corrupt existing file.**
 
-If a previous version wrote a malformed file, the app loads defaults at
-startup and logs:
+If a previous version wrote a malformed file, the app renames it to
+`settings.toml.bak`, loads defaults at startup, and logs:
 
 ```
-[WARN  winplayer::settings] settings.toml parse failed (...); using defaults
+[WARN  winplayer::settings] settings.toml parse failed (...); backing up and using defaults
 ```
 
-To reset, delete `%APPDATA%\Recurate\Recurate\settings.toml`.
+Your old (broken) file is preserved as `settings.toml.bak` for inspection. To
+reset cleanly, delete both `settings.toml` and `settings.toml.bak` in
+`%APPDATA%\Recurate\Recurate\`. Out-of-range or non-finite values are clamped
+on load rather than rejected, so a bad `volume`/`threshold`/EQ band won't
+trigger this path — only TOML that fails to parse does.
 
 ## "Delete didn't renumber the folder"
 
@@ -184,14 +194,14 @@ step errors and toasts.
 
 ## "EQ doesn't seem to do anything"
 
-**Currently expected.** The EQ filter chain is built but not yet inserted
-into the audio pipeline. The Equalizer screen edits parameters and saves them
-to settings.toml, but the filters do not yet affect playback.
+**Currently expected from the Equalizer screen.** The engine has an EQ command
+path and the cpal callback can apply the filter chain, but the Equalizer screen
+currently edits settings only. It saves parameters to `settings.toml`, but does
+not yet push them into the running playback controller.
 
-Wiring the EQ into the decoder thread is a small future task: insert
-`equalizer.process_inplace(samples, channels)` before the `push_or_block`
-call in `decoder_loop`. The EQ is already designed for this — `process_inplace`
-is a no-op when `enabled` is false, so the cost is one branch per sample.
+The remaining task is the UI/playback binding: expose a playback-controller
+method that sends `EngineCmd::SetEqualizer { enabled, bands_db }` when settings
+change, and initialize the engine from saved EQ settings at startup if desired.
 
 ## "Window won't open / crashes immediately"
 

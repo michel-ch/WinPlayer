@@ -52,10 +52,10 @@ opt-level = 1         # baseline dev speed; symphonia is slow at opt-level 0
 
 Trade-offs:
 - `lto = "fat"` adds ~30 s to release link time but produces meaningfully faster code.
-- `panic = "abort"` means panics terminate immediately. We rely on `catch_unwind`
-  in `data/tags.rs` to prevent lofty parse panics from killing the scanner —
-  this still works because `catch_unwind` is a frame-level mechanism, not
-  unwinding-table-dependent.
+- `panic = "abort"` means panics terminate immediately. `data/tags.rs` wraps
+  lofty reads in `catch_unwind`, but aborting release builds do not unwind, so
+  that wrapper only catches panics in profiles that unwind. In release, a panic
+  from tag parsing is process-fatal.
 - `opt-level = 1` for dev: `cargo run` of debug mode at `opt-level = 0` makes
   symphonia decode painfully slow; level 1 is a fine middle ground.
 
@@ -71,21 +71,26 @@ Trade-offs:
 
 ## Binary size
 
-The release binary is ~12 MB stripped. The largest contributors:
+The release binary is ~11.8 MB stripped. The largest contributors:
 
 | Crate | ~Size |
 |---|---|
-| `symphonia` (full codec set) | ~3 MB |
 | `wgpu` + `naga` (egui backend) | ~3 MB |
+| `symphonia` (scoped codec set) | ~2 MB |
 | `lofty` | ~600 KB |
 | `rubato` (FFT resampling) | ~400 KB |
 | Everything else | ~5 MB |
 
+`symphonia` is already scoped in `Cargo.toml` to the codecs the scanner needs
+(`mp3, flac, aac, alac, isomp4, ogg, vorbis, wav, pcm`) via
+`default-features = false` rather than the catch-all `features = ["all"]`,
+which trims ~1 MB of unused decoders (and that much less untrusted-input parser
+surface). The unused `rand` dependency was also dropped.
+
 To shrink further:
-- Trim `symphonia` features. The default includes all codecs; if you only need
-  mp3 and flac, the binary drops by ~1 MB.
 - Replace the `wgpu` backend with `glow` in eframe features. Smaller, but
   may miss compositor effects.
+- Drop more `symphonia` codecs if your library is a single format.
 
 ## Build matrix
 

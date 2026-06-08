@@ -5,23 +5,35 @@ use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOption {
-    TitleAsc, TitleDesc,
-    ArtistAsc, ArtistDesc,
-    AlbumAsc, AlbumDesc,
-    DurationAsc, DurationDesc,
-    TrackNoAsc, TrackNoDesc,
-    FilenameAsc, FilenameDesc,
+    TitleAsc,
+    TitleDesc,
+    ArtistAsc,
+    ArtistDesc,
+    AlbumAsc,
+    AlbumDesc,
+    DurationAsc,
+    DurationDesc,
+    TrackNoAsc,
+    TrackNoDesc,
+    FilenameAsc,
+    FilenameDesc,
     Shuffle,
 }
 
 impl SortOption {
     pub const ALL: [SortOption; 13] = [
-        SortOption::TitleAsc, SortOption::TitleDesc,
-        SortOption::ArtistAsc, SortOption::ArtistDesc,
-        SortOption::AlbumAsc, SortOption::AlbumDesc,
-        SortOption::DurationAsc, SortOption::DurationDesc,
-        SortOption::TrackNoAsc, SortOption::TrackNoDesc,
-        SortOption::FilenameAsc, SortOption::FilenameDesc,
+        SortOption::TitleAsc,
+        SortOption::TitleDesc,
+        SortOption::ArtistAsc,
+        SortOption::ArtistDesc,
+        SortOption::AlbumAsc,
+        SortOption::AlbumDesc,
+        SortOption::DurationAsc,
+        SortOption::DurationDesc,
+        SortOption::TrackNoAsc,
+        SortOption::TrackNoDesc,
+        SortOption::FilenameAsc,
+        SortOption::FilenameDesc,
         SortOption::Shuffle,
     ];
 
@@ -45,7 +57,8 @@ impl SortOption {
 }
 
 fn filename_lower(s: &Song) -> String {
-    s.path.file_name()
+    s.path
+        .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default()
 }
@@ -54,17 +67,35 @@ pub fn sort_songs(songs: &mut [Song], opt: SortOption) {
     let key_lower = |s: &str| s.to_lowercase();
     match opt {
         SortOption::TitleAsc => songs.sort_by_key(|s| key_lower(&s.title)),
-        SortOption::TitleDesc => { songs.sort_by_key(|s| key_lower(&s.title)); songs.reverse(); }
+        SortOption::TitleDesc => {
+            songs.sort_by_key(|s| key_lower(&s.title));
+            songs.reverse();
+        }
         SortOption::ArtistAsc => songs.sort_by_key(|s| key_lower(&s.artist)),
-        SortOption::ArtistDesc => { songs.sort_by_key(|s| key_lower(&s.artist)); songs.reverse(); }
+        SortOption::ArtistDesc => {
+            songs.sort_by_key(|s| key_lower(&s.artist));
+            songs.reverse();
+        }
         SortOption::AlbumAsc => songs.sort_by_key(|s| key_lower(&s.album)),
-        SortOption::AlbumDesc => { songs.sort_by_key(|s| key_lower(&s.album)); songs.reverse(); }
+        SortOption::AlbumDesc => {
+            songs.sort_by_key(|s| key_lower(&s.album));
+            songs.reverse();
+        }
         SortOption::DurationAsc => songs.sort_by_key(|s| s.duration),
-        SortOption::DurationDesc => { songs.sort_by_key(|s| s.duration); songs.reverse(); }
+        SortOption::DurationDesc => {
+            songs.sort_by_key(|s| s.duration);
+            songs.reverse();
+        }
         SortOption::TrackNoAsc => songs.sort_by_key(|s| s.track_no.unwrap_or(u32::MAX)),
-        SortOption::TrackNoDesc => { songs.sort_by_key(|s| s.track_no.unwrap_or(0)); songs.reverse(); }
+        SortOption::TrackNoDesc => {
+            songs.sort_by_key(|s| s.track_no.unwrap_or(0));
+            songs.reverse();
+        }
         SortOption::FilenameAsc => songs.sort_by_key(filename_lower),
-        SortOption::FilenameDesc => { songs.sort_by_key(filename_lower); songs.reverse(); }
+        SortOption::FilenameDesc => {
+            songs.sort_by_key(filename_lower);
+            songs.reverse();
+        }
         SortOption::Shuffle => {
             let nanos = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -85,12 +116,24 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    fn s(id: i64, title: &str, artist: &str, dur_secs: u64, track: Option<u32>, name: &str) -> Song {
+    fn s(
+        id: i64,
+        title: &str,
+        artist: &str,
+        dur_secs: u64,
+        track: Option<u32>,
+        name: &str,
+    ) -> Song {
         Song {
-            id, title: title.into(), artist: artist.into(),
-            album: String::new(), album_artist: String::new(),
+            id,
+            title: title.into(),
+            artist: artist.into(),
+            album: String::new(),
+            album_artist: String::new(),
             duration: Duration::from_secs(dur_secs),
-            year: None, genre: None, composer: None,
+            year: None,
+            genre: None,
+            composer: None,
             track_no: track,
             path: PathBuf::from(name),
             has_embedded_art: false,
@@ -99,7 +142,10 @@ mod tests {
 
     #[test]
     fn title_asc_is_case_insensitive() {
-        let mut v = vec![s(1, "beta", "", 0, None, "1"), s(2, "Alpha", "", 0, None, "2")];
+        let mut v = vec![
+            s(1, "beta", "", 0, None, "1"),
+            s(2, "Alpha", "", 0, None, "2"),
+        ];
         sort_songs(&mut v, SortOption::TitleAsc);
         assert_eq!(v[0].id, 2);
     }

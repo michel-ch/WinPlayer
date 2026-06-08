@@ -5,7 +5,7 @@ switching feel instant and seeking feel snappy.
 
 ```
 file → symphonia → planar f32 → [optional: rubato resample] → interleaved f32
-     → ring buffer → cpal callback → device
+     → ring buffer → cpal callback → [optional EQ + volume] → device
 ```
 
 ## Components
@@ -13,16 +13,20 @@ file → symphonia → planar f32 → [optional: rubato resample] → interleave
 ### `AudioOutput` (`src/engine/output.rs`)
 
 Wraps a `cpal::Stream` plus a `ringbuf::HeapRb<f32>` (single-producer /
-single-consumer) sized at 2 seconds of buffer at the device's native sample
-rate and channel count. Three sample-format paths (F32 / I16 / U16); the F32
-path is the fast one, I16 / U16 fall back to a per-callback intermediate
-`Vec<f32>` and convert at the end.
+single-consumer) sized at `BUFFER_MILLIS` (500 ms) of buffer at the device's
+native sample rate and channel count. 500 ms is enough decode headroom while
+keeping latency low for volume and EQ changes.
+Three sample-format paths (F32 / I16 / U16); the F32 path is the fast one,
+I16 / U16 convert through a reused `Vec<f32>` scratch buffer. The scratch buffer
+is owned by the callback closure and reused across calls. It is preallocated
+from the configured device buffer size and processed in chunks, so the callback
+does not grow it on the hot path.
 
 `OutputControls` is the `Send + Clone` handle the engine and decoder threads
 share. It exposes `push_samples`, `played_duration_ms`, `set_position_anchor_ms`,
 `reset_position`, `drain_buffer`, `clear`, `play`, `pause`, `set_volume`,
-`buffered_samples`. The `cpal::Stream` itself stays on the engine thread —
-on Windows WASAPI requires same-thread stream ownership.
+`set_equalizer`, `buffered_samples`. The `cpal::Stream` itself stays on the
+engine thread — on Windows WASAPI requires same-thread stream ownership.
 
 ### `DecodeJob` (`src/engine/decoder.rs`)
 
@@ -31,7 +35,9 @@ optional pre-built `rubato::FftFixedInOut<f32>` resampler. The decoder thread:
 
 1. Check `stop_flag`. Bail if set.
 2. Check `seek_request_ms`. If pending, `format.seek(...)`, `decoder.reset()`,
-   `controls.reset_position()`, clear the planar accumulator.
+   reset the resampler (so the FFT overlap state doesn't bleed pre-seek audio
+   across the discontinuity), `controls.reset_position()`,
+   `controls.drain_buffer()`, and clear the planar accumulator.
 3. `format.next_packet()` → `decoder.decode(packet)`.
 4. Copy samples into per-channel planar buffers (with i16 / i32 → f32 conversion
    if needed).
@@ -44,13 +50,20 @@ optional pre-built `rubato::FftFixedInOut<f32>` resampler. The decoder thread:
 `stop_flag` between retries so an in-flight push doesn't pin the thread on
 track change.
 
+`DecodeJob::stop(self)` flips `stop_flag` and **joins** the thread — it consumes
+the job by value so it can take the `JoinHandle`. The engine joins the old
+decoder before it calls `controls.clear()`, which is what guarantees the
+stale-sample count is exact (no surviving decoder can push between the snapshot
+and the drain). A `Drop` impl joins as a backstop if a job is dropped without
+an explicit `stop()`, so rapid track switching never leaks decoder threads.
+
 ### `Equalizer` (`src/engine/eq.rs`)
 
 10 biquad bands at 31 / 62 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz, all
-`Type::PeakingEQ` with Butterworth Q. One filter chain per channel. Currently
-**not wired into the audio pipeline** — the screen edits the parameters and
-persists them, but the filter chain is not yet applied to samples on the
-decoder thread. This is the only part of the original spec not yet hot.
+`Type::PeakingEQ` with Butterworth Q. One filter chain per channel. The cpal
+callback owns the live filter state and refreshes it from atomic EQ settings
+when `EngineCmd::SetEqualizer` changes the version. The Equalizer screen still
+needs a UI-to-playback binding before user edits affect live audio.
 
 ### `Engine` facade (`src/engine/mod.rs`)
 
@@ -58,7 +71,8 @@ The engine thread receives `EngineCmd` and emits `EngineEvent`:
 
 ```
 EngineCmd: Load { path, autoplay } | Play | Pause | Stop
-         | SeekFraction(f32) | SetVolume(f32) | Shutdown
+         | SeekFraction(f32) | SetVolume(f32)
+         | SetEqualizer { enabled, bands_db } | Shutdown
 
 EngineEvent: LoadStarted | LoadFailed | Started { duration_ms }
            | Position { current_ms, duration_ms } | Paused | Resumed
@@ -96,8 +110,9 @@ When a Load command fires, the engine calls `controls.clear()`, which sets
 discard those samples before popping new ones.
 
 The naive implementation drains only one callback's worth per invocation
-(~480 samples at 10 ms callback period). With a 2-second / 88,200-sample
-buffer, that takes ~1.84 seconds of audible silence between tracks.
+(~480 samples at 10 ms callback period). Even with the current 500 ms buffer
+that would be hundreds of milliseconds of audible silence between tracks; with
+the old 2-second buffer it was ~1.84 s.
 
 The fix (in `fill_callback`):
 
@@ -112,14 +127,18 @@ if skip > 0 {
         if popped == 0 { break; }
         total += popped;
     }
-    skip_samples.fetch_sub(total, Ordering::AcqRel);
+    if total > 0 {
+        skip_samples.fetch_sub(total, Ordering::AcqRel);
+    }
 }
 // then proceed with normal fill from new samples
 ```
 
 The drain runs in a tight pop loop *within a single callback*, so by the time
 the callback returns the ring buffer is empty and ready for the new decoder.
-Track switch silence drops from ~1.84 s to ~10 ms (one callback period).
+Track switch silence drops to ~10 ms (one callback period). Partial drains are
+safe: if the buffer empties mid-loop the `popped == 0` break leaves the
+remaining count in `skip_samples` for the next callback to finish.
 
 The 1024-sample stack array keeps the work allocation-free. Total time on
 modern CPUs: a few microseconds per drain — well within the audio callback's
@@ -168,16 +187,19 @@ The cpal audio callback uses only:
 
 - `consumer.pop_slice(...)` — single-producer/single-consumer ring buffer pop,
   lock-free by design.
-- `AtomicU64::load`, `fetch_add`, `fetch_sub` — atomic loads/stores.
+- `AtomicU64::load` / `fetch_add` / `fetch_sub` — for `samples_played`,
+  `skip_samples`, EQ versioning, and position anchors.
 - `AtomicBool::load` — for the paused flag.
-- `Mutex<f32>::lock()` — for the volume. *This is the one lock on the hot
-  path.* It's contended only when the user drags the volume slider, and the
-  critical section is one f32 read. In practice this is fine for soft real-time;
-  if it ever causes audible glitching, swap to `AtomicU32::load` with bit-cast
-  semantics.
+- `AtomicU32::load(Relaxed)` + `f32::from_bits` — for the volume. The volume is
+  stored as the bit-pattern of a clamped, NaN-scrubbed f32, so reading it is a
+  single relaxed atomic load with **zero locks on the hot path**. (Earlier
+  versions held a `Mutex<f32>` here; it was the only hot-path lock and has been
+  removed.)
 
-No other locks. No `Arc::clone` in the callback. No allocation. The 1024-sample
-skip-drain temporary is on the stack.
+No locks at all. No `Arc::clone` in the callback. The F32 path is allocation-free:
+the 1024-sample skip-drain temporary is a stack array. The I16/U16 paths reuse a
+closure-owned scratch buffer and process in chunks if cpal delivers more samples
+than the scratch size.
 
 ### Two-pass renumber
 
@@ -187,12 +209,17 @@ skip-drain temporary is on the stack.
 A single-pass shift like `01.mp3 → 02.mp3, 02.mp3 → 03.mp3` overwrites
 `02.mp3` before reading it. Two-pass:
 
-1. Rename every file to a temp name (`.tmp_renumber_<nanos>_<i>_<stem>.<ext>`)
-   that can't collide with any final name.
-2. Rename each temp to its final `01 - …`, `02 - …` name.
+1. Rename every file to a temp name
+   (`.tmp_renumber_<pid>_<nanos>_<i>_<stem>.<ext>`) that can't collide with any
+   final name. Each successful move is recorded for rollback.
+2. Rename each temp to its final `01 - …`, `02 - …` name. If a final name
+   already exists (a collision with an unrelated pre-existing file), that temp
+   is restored to its original name and skipped rather than clobbering data.
 
-The unique temp namespace (`<nanos>_<i>`) means concurrent renumberings of
-different folders can never collide.
+The unique temp namespace (`<pid>_<nanos>_<i>`) means concurrent renumberings —
+and any stale temps from a crashed prior run — can never collide. If any rename
+errors mid-operation, every move made so far is rolled back (best-effort, in
+reverse order) so the folder isn't left half-renamed.
 
 ## Sample rate handling
 
@@ -210,7 +237,9 @@ rather than on the decoder thread after the swap.
 
 ## Channel mapping
 
-`interleave_with_channel_map(planar, dst_ch)` handles common cases:
+`interleave_into(planar, dst_ch, &mut out)` interleaves into a caller-owned
+buffer that is reused across calls (no per-chunk allocation). It handles common
+cases:
 
 - Mono source, stereo device: duplicate each sample to both channels.
 - Stereo source, stereo device: passthrough.
@@ -218,6 +247,10 @@ rather than on the decoder thread after the swap.
 - Source channel count exceeds device: extra channels dropped.
 - Device channel count exceeds source: last source channel duplicated to
   fill remaining device channels.
+
+A zero-channel stream is rejected up front in `prepare_decode` (it would
+otherwise make the resampler's `planar[0]` index panic — fatal under
+`panic = "abort"`).
 
 This is a reasonable default. A more sophisticated downmix (proper L/R/C/Ls/Rs
 to L/R) would require channel layout awareness and is left as future work.

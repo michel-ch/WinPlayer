@@ -1,6 +1,7 @@
 use crate::domain::{song_id_from_path, Song};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::{Accessor, ItemKey};
+#[cfg(panic = "unwind")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,19 +11,29 @@ const UNKNOWN_ARTIST: &str = "Unknown Artist";
 pub fn parse_track_prefix(path: &Path) -> Option<u32> {
     let stem = path.file_stem()?.to_string_lossy();
     let digits: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() { return None; }
+    if digits.is_empty() {
+        return None;
+    }
     digits.parse().ok()
 }
 
 pub fn read_song(path: &Path) -> Option<Song> {
-    let result = catch_unwind(AssertUnwindSafe(|| read_song_inner(path)));
-    match result {
-        Ok(Some(s)) => Some(s),
-        Ok(None) => None,
-        Err(_) => {
-            log::warn!("lofty panicked on {}", path.display());
-            Some(synthetic_song(path))
+    #[cfg(panic = "unwind")]
+    {
+        let result = catch_unwind(AssertUnwindSafe(|| read_song_inner(path)));
+        match result {
+            Ok(Some(s)) => Some(s),
+            Ok(None) => None,
+            Err(_) => {
+                log::warn!("lofty panicked on {}", path.display());
+                Some(synthetic_song(path))
+            }
         }
+    }
+
+    #[cfg(not(panic = "unwind"))]
+    {
+        read_song_inner(path)
     }
 }
 
@@ -61,7 +72,7 @@ fn read_song_inner(path: &Path) -> Option<Song> {
         .and_then(|t| t.track())
         .or_else(|| parse_track_prefix(path));
 
-    let has_embedded_art = primary_tag.map_or(false, |t| t.picture_count() > 0);
+    let has_embedded_art = primary_tag.is_some_and(|t| t.picture_count() > 0);
 
     Some(Song {
         id: song_id_from_path(path),
@@ -99,7 +110,7 @@ fn synthetic_song(path: &Path) -> Song {
         artist: UNKNOWN_ARTIST.to_string(),
         album: parent_folder_name(path),
         album_artist: UNKNOWN_ARTIST.to_string(),
-        duration: Duration::ZERO,
+        duration: Duration::from_secs(1),
         year: None,
         genre: None,
         composer: None,
